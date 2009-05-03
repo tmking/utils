@@ -1,0 +1,70 @@
+#!/bin/bash
+# log viewer
+# (requires zcolorize)
+
+DIR=/var/log
+DATE=`date "+%b %e"`
+CURRENT_URL="http://www.linuxsupportline.com/~pgp/linux/linux.html#Scripts"
+zcolorize=`which zcolorize`
+
+me=${0##*/}
+
+if [ -z "$DIR" ]; then
+   DIR=$PWD
+fi
+
+if [ -n "$(type -path logcolorise.pl | grep $PATH)" ]; then
+   echo "logcolorise.pl is not in your path!"
+   echo "please download it from:"
+   echo "   $CURRENT_URL"
+fi
+
+helpmsg() {
+	cat <<EOF
+	usage: $me <filename> <date [nubmer of lines]>
+ 
+	the value <filename> can be a full path statement,
+	or else the file you specify will be prepended with
+    	the value of DIR as specified in the script.
+    
+	you may also specify an argument <date> which will sort
+	output according to the date (as specified in the script),
+	or you may specify the number of lines to be outputted.
+	the default action is to simply output the entire log file.
+EOF
+exit
+}
+
+testargs() 
+{
+	case $1 in
+		*/*)
+			FILE=$1		;;
+		*)
+		if [ -e $DIR/$1 ]; then
+			FILE=$DIR/$1
+		else
+			FILE="./$1"
+		fi
+	esac
+}
+
+if [ -z "$1" ]; then
+	helpmsg
+else
+	
+	testargs $*
+	case "$2" in
+		date)
+			echo "viewing $1 sorted by $DATE"
+			grep "$DATE" $FILE | $zcolorize
+		;;
+		[0-9]* )
+			echo "viewing $2 lines of $FILE"
+			tail -n $2 $FILE | $zcolorize
+		;;
+	*)
+		echo "viewing $FILE"
+		grep "$2" $FILE | $zcolorize
+	esac	
+fi

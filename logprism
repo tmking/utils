@@ -1,0 +1,1216 @@
+#!/usr/bin/perl -w
+#=============================================================================
+#
+#      Copyright (C) 2005 - 2007, Matti Tukiainen, http://ktmatu.com/mt/
+#
+# Program name  : LogPrism (logprism.pl)
+# Version       : 2.03
+# Purpose       : LogPrism turns Apache access log files (combined) into
+#                   easy to read color highlighted format where user
+#                   sessions, error status codes, external referrers and
+#                   traffic from search engine spiders can be easily
+#                   distinguished. To make log files more informative
+#                   LogPrism can be configured to ignore log entries,
+#                   resolve numeric IP addresses into symbolic host names
+#                   and show the register (RIPE, ARIN, etc.) of
+#                   unresolvable IP addresses. LogPrism supports console
+#                   type ANSI colors and HTML.
+#
+# Platforms     : All platforms where Perl is available should be OK. Tested
+#                   with Solaris Perl 5.8.0 and Linux Perl 5.6.1.
+#                   Requires Term::ANSIColor which comes with Perl 5.6 and
+#                   later.
+# Date          : 2007-01-26
+# Updates       : 1.00 Initial release. (2005-01-26)
+#                 1.01 Added new IANA IP address assignments.  (2005-03-31)
+#                 1.02 Added new IANA IP address assignments,  (2005-05-09)
+#                        AfriNIC.
+#                 1.03 Added new IANA IP address assignments.  (2005-07-04)
+#                 1.04 Added new IANA IP address assignments.  (2006-01-09)
+#                 2.00 Suppors HTML. Added all IANA IP address (2006-02-06)
+#                        assignments. Small modification to
+#                        parser.
+#                 2.01 Added new IANA IP address assignments.  (2006-09-13)
+#                 2.02 Added new IANA IP address assignments.  (2006-10-06)
+#                 2.03 Added new IANA IP address assignments.  (2007-01-26)
+#
+# Author        : Matti Tukiainen, http://ktmatu.com/mt/
+#
+# Homepage      : http://ktmatu.com/software/logprism/
+#
+# Copying       : This program may be used under the terms of GNU General
+#                   Public License, http://www.gnu.org/copyleft/gpl.html .
+#
+# Usage         : % perl logprism.pl -h
+#                 % ./logprism.pl access_log -dns -sessions
+#                     -local-url "^http://www.example.com/" | less -R
+#                 % ./logprism.pl access_log -dns -sessions -html
+#                     -local-url "^http://www.example.com/" -output log.html
+#                 % tail -f access_log | ./logprism.pl -dns -sessions
+#                     -local-url "^http://www.example.com/"
+#                     -exclude "\.(?:ico|gif|png)$" -registry
+#
+#=============================================================================
+
+use strict;
+use Socket qw (AF_INET);
+use Getopt::Long;
+use Term::ANSIColor;
+eval "use Win32::Console::ANSI;"; # Works without this on Windows also!
+
+
+
+
+# Foreground colors: black, red, green, yellow, blue, magenta, cyan, white
+# Background colors: on_black, on_red, on_green, on_yellow, on_blue,
+#   on_magenta, on_cyan
+# Other attributes: clear, reset, dark, bold, underline, underscore,
+#   blink, reverse, concealed
+#
+# See also: get_html_head
+my (%COLORS) = (
+    "ip"        => {
+        "ansi" => "white",
+        "css"  => "i"
+    },
+    "identd"    => {
+        "ansi" => "red",
+        "css"  => "n"
+    },
+    "username"  => {
+        "ansi" => "red",
+        "css"  => "u"
+    },
+    "date"      => {
+        "ansi" => "blue",
+        "css"  => "d"
+    },
+    "time"      => {
+        "ansi" => "bold blue",
+        "css"  => "t"
+    },
+    "time-zone" => {
+        "ansi" => "blue",
+        "css"  => "z"
+    },
+
+    # Try entries until the regular expression matches.
+    "method"    => [
+        [
+            '^(GET|HEAD)$',
+            {
+                "ansi" => "yellow",
+                "css"  => "mg"
+            }
+        ],
+        [
+            '^POST$',
+            {
+                "ansi" => "bold yellow",
+                "css"  => "mp"
+            }
+        ],
+        [
+            ".*",
+            {
+                "ansi" => "underline yellow",
+                "css"  => "mo"
+            }
+        ],
+    ],
+
+    "file" => {
+        "ansi" => "bold red",
+        "css"  => "f"
+    },
+    "protocol"  => {
+        "ansi" => "yellow",
+        "css"  => "p"
+    },
+    "status"    => [
+        [
+            "^2",
+            {
+                "ansi" => "blue",
+                "css"  => "s2"
+            }
+        ],
+        [
+            "^[45]",
+            {
+                "ansi" => "underline red",
+                "css"  => "s4"
+            }
+        ],
+        [
+            "^30[123]",
+            {
+                "ansi" => "underline blue",
+                "css"  => "s3"
+            }
+        ],
+        [
+            ".*",
+            {
+                "ansi" => "blue",
+                "css"  => "so"
+            }
+        ]
+    ],
+
+    "bytes" => {
+        "ansi" => "bold red",
+        "css"  => "b"
+    },
+
+    # Use -local-url
+    "local-referrer" => {
+        "ansi" => "cyan",
+        "css"  => "rl"
+    },
+    "referrer"   => [
+        [
+            ".*",
+            {
+                "ansi" => "underline cyan",
+                "css"  => "re"
+            }
+        ]
+    ],
+
+    "client"   => [
+        [
+            "(?i:" .
+            "Googlebot|" .        # Google
+            "Slurp|" .            # Yahoo!
+            "Almaden|" .          # IBM
+            "Ask Jeeves|" .       # Ask Jeeves/Teoma
+            "Gigabot|" .          # Gigablast
+            "Mediapartners|" .    # Google
+            "msnbot|" .           # Microsoft
+            "ZyBorg|" .           # WiseNut
+            "ichiro|" .           # Goo
+            "geourl|" .           # geourl.org
+            "Nutch|" .            # Apache Nutch
+            "ia_archiver|" .      # Alexa
+            "psbot" .             # Picsearch
+            ")",
+            {
+                "ansi" => "underline magenta",
+                "css"  => "cr"
+            }
+        ],
+        # Webmasterworld's A Close to perfect .htaccess ban list
+        [
+            "(?i:" .
+            "BlackWidow|" .
+            "Bot\ mailto:craftbot\@yahoo.com|" .
+            "ChinaClaw|" .
+            "DISCo|" .
+            "Download\ Demon|" .
+            "eCatch|" .
+            "EirGrabber|" .
+            "EmailSiphon|" .
+            "Express\ WebPictures|" .
+            "ExtractorPro|" .
+            "EyeNetIE|" .
+            "FlashGet|" .
+            "GetRight|" .
+            "Go!Zilla|" .
+            "Go-Ahead-Got-It|" .
+            "GrabNet|" .
+            "Grafula|" .
+            "HMView|" .
+            "HTTrack|" .
+            "Image\ Stripper|" .
+            "Image\ Sucker|" .
+            "InterGET|" .
+            "Internet\ Ninja|" .
+            "JetCar|" .
+            "JOC\ Web\ Spider|" .
+            "larbin|" .
+            "LeechFTP|" .
+            "Mass\ Downloader|" .
+            "MIDown\ tool|" .
+            "Mister\ PiX|" .
+            "Navroad|" .
+            "NearSite|" .
+            "NetAnts|" .
+            "NetSpider|" .
+            "Net\ Vampire|" .
+            "NetZIP|" .
+            "Octopus|" .
+            "Offline\ Explorer|" .
+            "Offline\ Navigator|" .
+            "PageGrabber|" .
+            "Papa\ Foto|" .
+            "pcBrowser|" .
+            "RealDownload|" .
+            "ReGet|" .
+            "Siphon|" .
+            "SiteSnagger|" .
+            "SmartDownload|" .
+            "SuperBot|" .
+            "SuperHTTP|" .
+            "Surfbot|" .
+            "tAkeOut|" .
+            "Teleport\ Pro|" .
+            "VoidEYE|" .
+            "Web\ Image\ Collector|" .
+            "Web\ Sucker|" .
+            "WebAuto|" .
+            "webcopier|" .
+            "WebFetch|" .
+            "WebReaper|" .
+            "WebSauger|" .
+            "Website\ eXtractor|" .
+            "WebStripper|" .
+            "WebWhacker|" .
+            "WebZIP|" .
+            "Wget|" .
+            "Widow|" .
+            "Xaldon\ WebSpider|" .
+            "Zeus" .
+            ")",
+            {
+                "ansi" => "bold magenta",
+                "css"  => "cb"
+            }
+        ],
+        [
+            ".*",
+            {
+                "ansi" => "magenta",
+                "css"  => "cg"
+            }
+        ]
+    ],
+
+    "other"     => {
+        "ansi" => "bold red",
+        "css"  => "e"
+    },
+
+    # '[', ']', '"'
+    "[]"        => {
+        "ansi" => "white",
+        "css"  => "s"
+    }
+);
+
+# http://www.iana.org/assignments/ipv4-address-space
+# 16 January 2007
+my (%IP_BLOCK_REGISTRY) = (
+    "0" => "IANA_-_Reserved",
+    "1" => "IANA_-_Reserved",
+    "2" => "IANA_-_Reserved",
+    "3" => "General_Electric_Company",
+    "4" => "Bolt_Beranek_and_Newman_Inc.",
+    "5" => "IANA_-_Reserved",
+    "6" => "Army_Information_Systems_Center",
+    "7" => "IANA_-_Reserved",
+    "8" => "Bolt_Beranek_and_Newman_Inc.",
+    "9" => "IBM",
+    "10" => "IANA_-_Private_Use",
+    "11" => "DoD_Intel_Information_Systems",
+    "12" => "AT&T_Bell_Laboratories",
+    "13" => "Xerox_Corporation",
+    "14" => "IANA_-_Public_Data_Network",
+    "15" => "Hewlett-Packard_Company",
+    "16" => "Digital_Equipment_Corporation",
+    "17" => "Apple_Computer_Inc.",
+    "18" => "MIT",
+    "19" => "Ford_Motor_Company",
+    "20" => "Computer_Sciences_Corporation",
+    "21" => "DDN-RVN",
+    "22" => "Defense_Information_Systems_Agency",
+    "23" => "IANA_-_Reserved",
+    "24" => "ARIN_-_Cable_Block",
+    "25" => "UK_Ministry_of_Defense",
+    "26" => "Defense_Information_Systems_Agency",
+    "27" => "IANA_-_Reserved",
+    "28" => "DSI-North",
+    "29" => "Defense_Information_Systems_Agency",
+    "30" => "Defense_Information_Systems_Agency",
+    "31" => "IANA_-_Reserved",
+    "32" => "Norsk_Informasjonsteknology",
+    "33" => "DLA_Systems_Automation_Center",
+    "34" => "Halliburton_Company",
+    "35" => "MERIT_Computer_Network",
+    "36" => "IANA_-_Reserved",
+    "37" => "IANA_-_Reserved",
+    "38" => "Performance_Systems_International",
+    "39" => "IANA_-_Reserved",
+    "40" => "Eli_Lily_and_Company",
+
+    "41"  => "AfriNIC",
+
+    "42"  => "IANA_-_Reserved",
+    "43"  => "Japan_Inet",
+    "44"  => "Amateur_Radio_Digital_Communications",
+    "45"  => "Interop_Show_Network",
+    "46"  => "Bolt_Beranek_and_Newman_Inc.",
+    "47"  => "Bell-Northern_Research",
+    "48"  => "Prudential_Securities_Inc.",
+    "49"  => "Joint_Technical_Command",
+    "50"  => "Joint_Technical_Command",
+    "51"  => "Deparment_of_Social_Security_of_UK",
+    "52"  => "E.I._duPont_de_Nemours_and_Co.,_Inc.",
+    "53"  => "Cap_Debis_CCS",
+    "54"  => "Merck_and_Co.,_Inc.",
+    "55"  => "Boeing_Computer_Services",
+    "56"  => "U.S._Postal_Service",
+    "57"  => "SITA",
+
+    "58"  => "APNIC",   "59"  => "APNIC",  "60"  => "APNIC",
+    "61"  => "APNIC",   "62"  => "RIPE",   "63"  => "ARIN",   "64"  => "ARIN",
+    "65"  => "ARIN",    "66"  => "ARIN",   "67"  => "ARIN",   "68"  => "ARIN",
+    "69"  => "ARIN",    "70"  => "ARIN",   "71"  => "ARIN",   "72"  => "ARIN",
+    "73"  => "ARIN",    "74"  => "ARIN",   "75"  => "ARIN",   "76"  => "ARIN",
+
+    "77"  => "RIPE",    "78"  => "RIPE",   "79"  => "RIPE",   "80"  => "RIPE",
+    "81"  => "RIPE",    "82"  => "RIPE",   "83"  => "RIPE",   "84"  => "RIPE",
+    "85"  => "RIPE",    "86"  => "RIPE",   "87"  => "RIPE",   "88"  => "RIPE",
+    "89"  => "RIPE",    "90"  => "RIPE",   "91"  => "RIPE",
+
+    "92"  => "IANA_-_Reserved",
+    "93"  => "IANA_-_Reserved",
+    "94"  => "IANA_-_Reserved",
+    "95"  => "IANA_-_Reserved",
+
+    "96"  => "ARIN",    "97"  => "ARIN",   "98"  => "ARIN",   "99"  => "ARIN",
+
+    "100"  => "IANA_-_Reserved",
+    "101"  => "IANA_-_Reserved",
+    "102"  => "IANA_-_Reserved",
+    "103"  => "IANA_-_Reserved",
+    "104"  => "IANA_-_Reserved",
+    "105"  => "IANA_-_Reserved",
+    "106"  => "IANA_-_Reserved",
+    "107"  => "IANA_-_Reserved",
+    "108"  => "IANA_-_Reserved",
+    "109"  => "IANA_-_Reserved",
+    "110"  => "IANA_-_Reserved",
+    "111"  => "IANA_-_Reserved",
+    "112"  => "IANA_-_Reserved",
+    "113"  => "IANA_-_Reserved",
+    "114"  => "IANA_-_Reserved",
+    "115"  => "IANA_-_Reserved",
+
+    "116" => "APNIC",  "117" => "APNIC", "118"  => "APNIC", "119"  => "APNIC",
+    "120" => "APNIC",  "121" => "APNIC", "122"  => "APNIC", "123"  => "APNIC",
+    "124" => "APNIC",  "125" => "APNIC", "126"  => "APNIC",
+
+    "127" => "IANA_-_Reserved",
+    "128" => "Various_Registries",
+    "129" => "Various_Registries",
+    "130" => "Various_Registries",
+    "131" => "Various_Registries",
+    "132" => "Various_Registries",
+    "133" => "Various_Registries",
+    "134" => "Various_Registries",
+    "135" => "Various_Registries",
+    "136" => "Various_Registries",
+    "137" => "Various_Registries",
+    "138" => "Various_Registries",
+    "139" => "Various_Registries",
+    "140" => "Various_Registries",
+    "141" => "Various_Registries",
+    "142" => "Various_Registries",
+    "143" => "Various_Registries",
+    "144" => "Various_Registries",
+    "145" => "Various_Registries",
+    "146" => "Various_Registries",
+    "147" => "Various_Registries",
+    "148" => "Various_Registries",
+    "149" => "Various_Registries",
+    "150" => "Various_Registries",
+    "151" => "Various_Registries",
+    "152" => "Various_Registries",
+    "153" => "Various_Registries",
+    "154" => "Various_Registries",
+    "155" => "Various_Registries",
+    "156" => "Various_Registries",
+    "157" => "Various_Registries",
+    "158" => "Various_Registries",
+    "159" => "Various_Registries",
+    "160" => "Various_Registries",
+    "161" => "Various_Registries",
+    "162" => "Various_Registries",
+    "163" => "Various_Registries",
+    "164" => "Various_Registries",
+    "165" => "Various_Registries",
+    "166" => "Various_Registries",
+    "167" => "Various_Registries",
+    "168" => "Various_Registries",
+    "169" => "Various_Registries",
+    "170" => "Various_Registries",
+    "171" => "Various_Registries",
+    "172" => "Various_Registries",
+    "173" => "IANA_-_Reserved",
+    "174" => "IANA_-_Reserved",
+    "175" => "IANA_-_Reserved",
+    "176" => "IANA_-_Reserved",
+    "177" => "IANA_-_Reserved",
+    "178" => "IANA_-_Reserved",
+    "179" => "IANA_-_Reserved",
+    "180" => "IANA_-_Reserved",
+    "181" => "IANA_-_Reserved",
+    "182" => "IANA_-_Reserved",
+    "183" => "IANA_-_Reserved",
+    "184" => "IANA_-_Reserved",
+    "185" => "IANA_-_Reserved",
+    "186" => "IANA_-_Reserved",
+    "187" => "IANA_-_Reserved",
+    "188" => "Various_Registries",
+
+    "189" => "LACNIC",
+    "190" => "LACNIC",
+
+    "191" => "Various_Registries",
+    "192" => "Various_Registries",
+
+    "193" => "RIPE",
+    "194" => "RIPE",
+    "195" => "RIPE",
+
+    "196" => "Various_Registries",
+    "197" => "IANA_-_Reserved",
+    "198" => "Various_Registries",
+
+    "199" => "ARIN",    "200" => "LACNIC", "201" => "LACNIC", "202" => "APNIC",
+    "203" => "APNIC",   "204" => "ARIN",   "205" => "ARIN",   "206" => "ARIN",
+    "207" => "ARIN",    "208" => "ARIN",   "209" => "ARIN",   "210" => "APNIC",
+    "211" => "APNIC",   "212" => "RIPE",   "213" => "RIPE",
+
+    "214" => "US-DOD",
+    "215" => "US-DOD",
+
+    "216" => "ARIN",
+    "217" => "RIPE",    "218" => "APNIC",  "219" => "APNIC",  "220" => "APNIC",
+    "221" => "APNIC",   "222" => "APNIC",
+
+    "223" => "IANA_-_Reserved",                               
+    "224" => "IANA_-_Multicast",
+    "225" => "IANA_-_Multicast",
+    "226" => "IANA_-_Multicast",
+    "227" => "IANA_-_Multicast",
+    "228" => "IANA_-_Multicast",
+    "229" => "IANA_-_Multicast",
+    "230" => "IANA_-_Multicast",
+    "231" => "IANA_-_Multicast",
+    "232" => "IANA_-_Multicast",
+    "233" => "IANA_-_Multicast",
+    "234" => "IANA_-_Multicast",
+    "235" => "IANA_-_Multicast",
+    "236" => "IANA_-_Multicast",
+    "237" => "IANA_-_Multicast",
+    "238" => "IANA_-_Multicast",
+    "239" => "IANA_-_Multicast",
+    "240" => "IANA_-_Reserved",
+    "241" => "IANA_-_Reserved",
+    "242" => "IANA_-_Reserved",
+    "243" => "IANA_-_Reserved",
+    "244" => "IANA_-_Reserved",
+    "245" => "IANA_-_Reserved",
+    "246" => "IANA_-_Reserved",
+    "247" => "IANA_-_Reserved",
+    "248" => "IANA_-_Reserved",
+    "249" => "IANA_-_Reserved",
+    "250" => "IANA_-_Reserved",
+    "251" => "IANA_-_Reserved",
+    "252" => "IANA_-_Reserved",
+    "253" => "IANA_-_Reserved",
+    "254" => "IANA_-_Reserved",
+    "255" => "IANA_-_Reserved",
+);
+
+
+my ($HELP_MSG) = <<HELPMESSAGE;
+LogPrism, Copyright (C) 2005-2007, Matti Tukiainen, http://ktmatu.com/mt/
+
+Usage: $0 [-help|-dns|-sessions|-exclude <rexp>|local-url <rexp> [-logfile <file> ...|<file> ...]]
+
+ -help             give this help
+ -dns              resolve numeric IP addresses into domain names
+ -exclude <rexp>   exclude requests to file matching <rexp>
+ -html             create HTML output
+ -local-url <rexp> highlight referring URLs matching <rexp> differently
+ -logfile <file>   Apache combined log file, glob OK (stdin if not specified)
+ -output <file>    write log to <file> instead of stdout.
+ -registry         show registry (e.g. ARIN) of the IP if it cannot be resolved
+ -sessions         highlight browsing sessions
+ <file>            Apache combined log file, glob OK (stdin if not specified)
+
+Report bugs to http://ktmatu.com/mt/
+HELPMESSAGE
+
+
+
+
+sub parse_log_line {
+    my ($line) = shift;
+
+    my ($ok) = undef;
+    my ($ip, $identd, $username, $date, $time, $tz, $method, $file,
+        $protocol, $status, $bytes, $referer, $client, $other) = undef;
+
+    # Modified from
+    # groups.google.fi/groups?selm=eli%240101161337%40qz.little-neck.ny.us
+    if (
+        $line =~ m /
+            ^
+            ([^\s]+)                   # IP
+                \s+
+            (\S+)                      # ident check
+                \s+
+            (\S+)                      # auth user
+                \s+
+            \[
+                (\d{2}\/\w{3}\/\d{4})  # date
+                    \:
+                (\d{2}\:\d{2}\:\d{2})  # time
+                    \s+
+                ([\+\-]\d+)            # timezone
+            \]
+                \s
+            \"
+                (\w+)                  # GET, POST, HEAD
+                    \s+
+                (\S+)                  # URI, URL
+                (?:
+                    \s+
+                    (HTTP\/[\d.]+)     # protocol version
+                )?
+            \"
+                \s+
+            (\d{3})                    # response code
+                \s+
+            (\d+|-)                    # bytes written
+                \s+
+            \"([^\"]*)\"               # referrer
+                \s+
+            \"([^\"]*)\"               # user agent
+                \s*
+            (.*)                       # other
+        /ix
+    ) {
+        ($ip, $identd, $username, $date, $time, $tz, $method, $file,
+            $protocol, $status, $bytes, $referer, $client, $other) =
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
+        $ok = 1;
+    };
+
+    return ($ok, $ip, $identd, $username, $date, $time, $tz, $method, $file,
+        $protocol, $status, $bytes, $referer, $client, $other);
+};
+
+
+
+
+sub number_to_domain {
+    my ($a, $b, $c, $d) = @_;
+
+    my ($name, $aliases, $type, $len, @addrs);
+    my ($addr) = pack ("C4", $a, $b, $c, $d);
+
+    ($name, $aliases, $type, $len, @addrs) = gethostbyaddr ($addr, AF_INET);
+
+    return $name ? $name : join (".", ($a,  $b, $c, $d));
+};
+
+
+
+
+sub html_ent {
+    my ($str)  = shift;
+
+    sub encode {
+        my ($char) = shift;
+
+        my (%char_ent) = (
+            "&" => "&amp;",
+            "<" => "&lt;",
+            ">" => "&gt;"
+        );
+
+        return $char_ent {$char};
+    };
+
+    $str =~ s/([\Q&><\E])/encode ($1)/ge;
+
+    return $str;
+};
+
+
+
+
+sub get_html_head {
+    my ($file_name_str) = shift;
+
+    $file_name_str = html_ent ($file_name_str);
+    my ($css_color_str) = "";
+    my (@colors) = @{get_session_colors ("css")};
+    my (@names)  = @{get_session_colors ("cssnames")};
+
+    my ($i) = 0;
+    foreach my $item (@names) {
+        $css_color_str .= "." . $item . "{" . $colors [$i] . "}" . "\n";
+        $i++;
+    };
+
+    # See %COLORS
+    return <<END
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+  <head>
+    <!-- Generated by LogPrism, http://ktmatu.com/software/logprism/  -->
+    <!-- (c) Matti Tukiainen, http://ktmatu.com/                      -->
+
+    <title>$file_name_str</title>
+    <meta name="robots" content="noindex,nofollow" />
+    <style type="text/css" media="all">
+    <!--
+body {color: #000; background: #fff;}
+
+/* generic container for one line */
+.l {color: #000; background: #fff;}
+
+/* ip */
+.i {color: #999; background: #fff;}
+
+/* ident, user name */
+.n {color: #660099; background: #fff;}
+.u {color: #990080; background: #fff;}
+
+/* date, time, time zone */
+.d {color: #1463ff; background: #fff;}
+.t {color: #0047d6; background: #fff; font-weight: bold;}
+.z {color: #1463ff; background: #fff;}
+
+/* method: get, post, other */
+.mg {color: #d68f00; background: #fff;}
+.mp {color: #ffb114; background: #fff;}
+.mo {color: #fff; background: #d68f00;}
+
+/* file */
+.f {color: #991a00; background: #fff;}
+
+/* protocol */
+.p {color: #d68f00; background: #fff;}
+
+/* status: 2xx, 3xx, [45]xx, other */
+.s2 {color: #1463ff; background: #fff;}
+.s3 {color: #0047d6; background: #fff;}
+.s4 {color: #fff; background: #0047d6;}
+.so {color: blue; background: #fff;}
+
+/* bytes */
+.b {color: #00991a; background: #fff;}
+
+/* referrer: local, external */
+.rl {color: #0047d6; background: #fff;}
+.re {color: #1463ff; background: #fff; font-weight: bold;}
+
+/* client: good, bad, robot */
+.cg {color: #809900; background: #fff;}
+.cb {color: #fff; background: #00991a;}
+.cr {color: #00991a; background: #fff;}
+
+/* possible extra fields at the end */
+.e {color: #660099; background: #fff;}
+
+/* separators, ", [, etc. */
+.s {color: #666; background: #fff;}
+$css_color_str
+    -->
+    </style>
+  </head>
+  <body>
+    <pre>
+END
+};
+
+
+
+
+sub get_html_tail {
+    return <<END
+    </pre>
+  </body>
+</html>
+END
+};
+
+
+
+
+sub get_session_colors {
+    my ($format) = shift;
+
+    my (@colors) = ();
+
+    # This is a set of colors that looks quite OK on PuTTY AND SSH Tectia AND
+    # new LCD display AND old CRT screen.
+    my (@ansi_colors) = (
+        "black on_green",
+        "black on_yellow",
+        "black on_cyan",
+        "black on_white",
+
+        "red on_green",
+        "red on_yellow",
+        "red on_cyan",
+        "red on_white",
+
+        "blue on_green",
+        "blue on_yellow",
+
+        "blue on_cyan",
+        "blue on_white",
+
+        "magenta on_green",
+        "magenta on_yellow",
+
+        "magenta on_cyan",
+        "magenta on_white",
+
+        "cyan on_red",
+
+        "white on_red",
+        "white on_blue",
+
+        "bold black on_blue",
+        "bold black on_white",
+
+        "bold red on_blue",
+        "bold red on_white",
+
+        "bold green on_red",
+        "bold green on_blue",
+        "bold green on_magenta",
+
+        "bold yellow on_red",
+        "bold yellow on_blue",
+        "bold yellow on_magenta",
+
+        "bold blue on_yellow",
+
+        "bold blue on_white",
+
+        "bold magenta on_blue",
+
+        "bold cyan on_red",
+
+        "bold white on_red",
+        "bold white on_green",
+        "bold white on_blue",
+        "bold white on_magenta",
+    );
+
+    my ($foreground_color) = "ddd";
+    my (@css_colors) = ();
+    foreach my $l ("c", "9", "f") {
+        foreach my $m ("c", "9", "f") {
+            foreach my $r ("c", "9", "f") {
+                my ($bacground_color) = $l . $m . $r;
+                #~ print ($bacground_color, "\n");
+                foreach my $fg ("555", "003", "360", "630") {
+                    push (
+                        @css_colors,
+                        "color:#" .      $fg . ";" .
+                        "background:#" . $bacground_color  . ";"
+                    );
+                };
+            };
+        };
+    };
+
+    my (@css_color_names) = ();
+    my ($i) = 0;
+    foreach my $color (@css_colors) {
+        push (@css_color_names, "c" . $i);
+        $i++;
+    };
+
+    if ($format eq "ansi") {
+        @colors = @ansi_colors;
+    }
+    elsif ($format eq "css") {
+        @colors = @css_colors;
+    }
+    else {
+        @colors = @css_color_names;
+    };
+
+    return \@colors;
+};
+
+
+
+
+sub find_color {
+    my ($rules)  = shift;
+    my ($format) = shift;
+    my ($str)    = shift;
+
+    my ($color) = "";
+
+    foreach my $item (@{$rules}) {
+        # print ($str, " ", $item -> [0], "\t", $item -> [1], "\n");
+        my ($rexp) = $item -> [0];
+        if ($str =~ /$rexp/) {
+            $color = $item -> [1]{$format};
+            last;
+        };
+    };
+
+    return $color;
+};
+
+
+
+
+sub colorize {
+    my ($str)    = shift;
+    my ($color)  = shift;
+    my ($html)   = shift;
+
+    my ($colored_str) = "";
+
+    if ($html) {
+        $colored_str = '<span class="' . $color . '">' .
+            html_ent ($str) .
+            "</span>";
+    }
+    else {
+        $colored_str = colored ($str, $color);
+    };
+
+    # print ("\t", $colored_str, "\n");
+
+    return $colored_str;
+};
+
+
+
+
+sub read_log {
+    my ($log_filename_str) = shift;
+    my ($dns)              = shift;
+    my ($exclude_requests) = shift;
+    my ($local_url_str)    = shift;
+    my ($show_sessions)    = shift;
+    my ($show_registry)    = shift;
+    my ($output_file)      = shift;
+    my ($html)             = shift;
+
+    my (%ip_domain)      = ();
+    my (%session)        = ();
+    my (%session_color)  = ();
+    my (@session_pipe)   = ();
+    my ($session_total)  = 0;
+
+    my ($ok) = undef;
+    my ($ip, $identd, $username, $date, $time, $tz, $method, $file,
+        $protocol, $status, $bytes, $referer, $client, $other) = undef;
+
+    open (OUTPUT, ">" . $output_file) ||
+        die ("$0: " . "Cannot open " . $output_file . "\n");
+
+    my ($format) = "ansi";
+    my ($tmp_format) = $format;
+    if ($html) {
+        $format = "css";
+        $tmp_format = "cssnames";
+        #~ (print OUTPUT get_html_head (join (", ", @$log_filename_str)));
+    };
+
+    my (@session_colors) = @{get_session_colors ($tmp_format)};
+    my ($max_sessions)  = scalar (@session_colors);
+    # shuffle colors
+    @session_colors =  sort {rand (1) > 0.5 ? 1 : -1} @session_colors;
+
+    if ($html) {
+        (print OUTPUT get_html_head (join (", ", @$log_filename_str)));
+    };
+
+    if ($local_url_str) {
+        unshift (
+            @{$COLORS {"referrer"}}, [
+                $local_url_str,
+                $COLORS {"local-referrer"}
+            ]
+        );
+    };
+
+    foreach my $log_file (@$log_filename_str) {
+        open (LOGFILE, "<" . $log_file) || die ("$0: Cannot open " .$log_file);
+
+        while (<LOGFILE>) {
+            my ($line) = $_;
+            my ($colored) = "";
+            # print ($line);
+
+            ($ok, $ip, $identd, $username, $date, $time, $tz, $method, $file,
+                $protocol, $status, $bytes, $referer, $client, $other) =
+                parse_log_line ($line);
+            if ($ok) {
+                next if ($exclude_requests && ($file =~ /$exclude_requests/));
+
+                my ($name)        = "";
+                my ($registry)    = "";
+                my ($session_key) = "";
+                my ($session_id)  = "";
+
+                if (
+                    ($dns)
+                    &&
+                    ($ip =~ /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/)
+                ) {
+                    if ($ip_domain {$ip}) {
+                        $name = $ip_domain {$ip};
+
+                        # flush cache periodically
+                        if (scalar (keys (%ip_domain)) > 10_000) {
+                           %ip_domain = ();
+                        };
+                    }
+                    else {
+                        $name = number_to_domain (split (/\./, $ip));
+                        $ip_domain {$ip} = $name;
+                    };
+
+                    $ip = $name;
+                };
+
+                if (
+                    ($show_registry)
+                    &&
+                    (
+                        ($name =~ /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/)
+                        ||
+                        ($ip   =~ /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/)
+                    )
+                ) {
+                    $registry = $IP_BLOCK_REGISTRY {$1} || "";
+                };
+
+                if ($ip =~ /(\d{1,3}\.\d{1,3})\.\d{1,3}\.\d{1,3}/) {
+                    $session_key = $1;
+                }
+                else {
+                    my (@domain_parts) = split (/\./, $ip);
+                    $session_key = ($domain_parts [-2] || "") .
+                        ($domain_parts [-1] || "");
+                };
+
+                # calc hash for user agent string
+                my ($short_client) = unpack ("%16C*", $client) % 65536;
+                $session_id = $session_key . $short_client;
+
+                $session {$session_id}++;
+
+                # print (scalar (@session_pipe), "\n");
+                # print ($session_total, "\t", $max_sessions, "\n");
+                if ($session {$session_id} == 1) {
+                    $session_total++;
+
+                    unshift (@session_pipe, $session_id);
+                    $session_color {$session_id} =
+                        $session_colors [$session_total % $max_sessions];
+
+                    # print (join (", ", @session_pipe), "\n");
+                    # print ($session_id, "\t", $session {$session_id}, "\n");
+                };
+
+                # print ($session_total % $max_sessions, " %%%\n");
+
+                if (scalar (@session_pipe) > $max_sessions) {
+                my ($dropped_session) = pop (@session_pipe);
+                    delete ($session {$dropped_session});
+                    delete ($session_color {$dropped_session});
+                    # print ($dropped_session, "***\n");
+                };
+
+                my ($ses_color) = $session_color {$session_id};
+                my ($method_color) = find_color (
+                    $COLORS {"method"},
+                    $format,
+                    $method
+                );
+
+                my ($status_color) = find_color (
+                    $COLORS {"status"},
+                    $format,
+                    $status
+                );
+                my ($referrer_color) = find_color (
+                    $COLORS {"referrer"},
+                    $format,
+                    $referer
+                );
+                my ($client_color) = find_color (
+                    $COLORS {"client"},
+                    $format,
+                    $client
+                );
+                my ($ip_color) = $COLORS {"ip"}{$format};
+                if ($show_sessions) {
+                    $ip_color = $session_color {$session_id};
+                };
+
+                my ($space) = " ";
+                # my ($space) = $html ? "&nbsp;" : " ";
+
+                $colored .= colorize ($ip || "", $ip_color, $html);
+                if ($registry) {
+                    $colored .= colorize ("@" . $registry, $ip_color, $html);
+                };
+                $colored .= $space;
+                $colored .= colorize (
+                    $identd || "",
+                    $COLORS {"identd"}{$format},
+                    $html
+                );
+                $colored .= $space;
+                $colored .= colorize (
+                    $username || "", $COLORS {"username"}{$format},
+                    $html
+                );
+                $colored .= $space;
+                $colored .= colorize ("[", $COLORS {"[]"}{$format}, $html);
+                $colored .= colorize (
+                    $date || "",
+                    $COLORS {"date"}{$format},
+                    $html
+                );
+                $colored .= colorize (":", $COLORS {"[]"}{$format}, $html);
+                $colored .= colorize (
+                    $time || "",
+                    $COLORS {"time"}{$format},
+                    $html
+                );
+                $colored .= $space;
+                $colored .= colorize (
+                    $tz || "",
+                    $COLORS {"time-zone"}{$format},
+                    $html
+                );
+                $colored .= colorize ("]", $COLORS {"[]"}{$format}, $html);
+                $colored .= $space;
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+                $colored .= colorize ($method || "", $method_color, $html);
+
+                $colored .= $space;
+                $colored .= colorize (
+                    $file || "",
+                    $COLORS {"file"}{$format},
+                    $html
+                );
+
+                $colored .= $space;
+                $colored .= colorize (
+                    $protocol || "",
+                    $COLORS {"protocol"}{$format},
+                    $html
+                );
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+
+                $colored .= $space;
+                $colored .= colorize ($status || "", $status_color, $html);
+
+                $colored .= $space;
+                $colored .= colorize (
+                    $bytes || "",
+                    $COLORS {"bytes"}{$format},
+                    $html
+                );
+                $colored .= $space;
+
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+                $colored .= colorize ($referer || "", $referrer_color, $html);
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+                $colored .= $space;
+
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+                $colored .= colorize ($client || "", $client_color, $html);
+                $colored .= colorize ('"', $COLORS {"[]"}{$format}, $html);
+
+                if ($other) {
+                    $colored .= colorize (
+                        $other || "",
+                        $COLORS {"other"}{$format},
+                        $html
+                    );
+                };
+
+                if ($html) {
+                    $colored = '<span class="l">' . $colored . "</span>";
+                };
+
+                (print OUTPUT $colored, "\n");
+            }
+            else {
+                (print OUTPUT $line);
+            };
+        };
+
+        close (LOGFILE);
+    };
+
+    if ($html) {
+        (print OUTPUT get_html_tail ());
+    };
+
+    close (OUTPUT);
+};
+
+
+
+
+my ($help)          = "";
+my ($dns)           = 0;
+my ($exclude_str)   = "";
+my ($local_url_str) = "";
+my ($output_file)   = "-";
+my ($registry)      = 0;
+my ($sessions)      = 0;
+my ($html)          = 0;
+my (@log_file_list) = ();
+
+my ($ok) = GetOptions (
+    'help!'         => \$help,
+    'dns!'          => \$dns,
+    'exclude:s'     => \$exclude_str,
+    'local-url:s'   => \$local_url_str,
+    'output-file:s' => \$output_file,
+    'registry!'     => \$registry,
+    'sessions!'     => \$sessions,
+    'html!'         => \$html,
+    'logfile:s'     => \@log_file_list,
+);
+
+if ($help) {
+    die ($HELP_MSG);
+}
+else {
+    if (scalar (@ARGV) != 0) {
+        push (@log_file_list, @ARGV);
+    }
+    elsif (scalar (@log_file_list) == 0) {
+        push (@log_file_list, "-");
+    };
+
+    read_log (
+        \@log_file_list,
+        $dns,
+        $exclude_str,
+        $local_url_str,
+        $sessions,
+        $registry,
+        $output_file,
+        $html
+    );
+};

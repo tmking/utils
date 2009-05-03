@@ -1,0 +1,149 @@
+#!/bin/zsh
+
+it_player="0 mikmod -d 0"
+xm_player="0 xmp"
+mod_player="0 xmp"
+s3m_player="0 xmp"
+flac_player="flac123"
+
+#ogg_player="schedtool -I -e ogg123"
+
+if pidof raop_play >/dev/null 2>&1; then
+	ogg_player="ogg123 -d alsa -o dev:hw:1,0"
+	mp3_player="mpg123 -v -a hw:1,0"
+else
+	ogg_player="ogg123 -d alsa"
+	mp3_player="mpg123 -v"
+fi
+
+ogg_wav="ogg123 -d wav -f"
+
+#mp3_player="0 alsaplayer -i cli"
+#mp3_player="schedtool -I -e mpg123 -v"
+mp3_wav="mpg123 -w -o"
+
+playlist_dir=~/playlists
+
+me=${0##*/}
+version=0.7
+
+#debug=print
+
+help_msg() 
+{
+	cat <<EOF
+$me $version
+
+  -r <num>	repeat playlist <num> times
+
+currently reading playlists from $playlist_dir/
+EOF
+	exit $1
+}
+
+play_with() 
+{
+	case "$1:l" in
+    		*.ogg)	print $ogg_player	;;
+		*.mp3)	print $mp3_player	;;
+		*.it)	print $it_player	;;
+		*.xm)	print $xm_player	;;
+		*.s3m)	print $s3m_player	;;
+		*.flac) print $flac_player	;;
+		*.mod)	print $mod_player
+	esac
+}
+
+mk_pl_list() 
+{
+	typeset -A -g pl_list
+	for f in ~/playlists/**/*(N.); do
+		fl=( $fl "$f:t" "$f" )
+	done
+	pl_list=( $fl )
+}
+
+parse_args() 
+{
+	[ -z "$1" ] && return
+	case $1 in
+		-r)	repeat_num=$2; shift=2 ;;
+
+		*.m3u|*.pl)	playlist=$1	;;		
+
+		*/*|*.*)
+			if [ -f "$1" ]; then
+				songs=($songs $1)
+			else
+				exit 1 
+			fi
+			;;
+
+		*-h|*-help)
+		    	help_msg 0 ;;
+
+		*)
+	    		mk_pl_list
+	    		if [ -f "$playlist_dir/$1" ]; then
+				playlist="$playlist_dir/$1"
+			elif [ -n "${pl_list[$1]}" ]; then
+				playlist="${pl_list[$1]}"
+			elif [ -f "$1" ]; then
+				playlist="$1"
+			else
+				exit 1
+			fi
+	esac
+}
+
+mklist() 
+{
+	#rm -f /tmp/playlist
+	#num=$(( ${num:-0} + 1 ))
+	#print "$num: $f" >>/tmp/playlist
+	file="$1:gs/@/\\ "
+	export old_p=$p
+
+	if [ -f "$file" ]; then
+		set -- $(play_with $file)
+		[ "$1" = 0 ] && multi=1 && shift 1
+		p=$@
+		if [ "$p" != "$old_p" ] || bool $multi; then
+			[ -n "$list" ] && sep=';'
+			list=( $list $sep $p \""$file"\" )
+		else
+			list=( $list \""$file"\" )
+		fi
+	else
+		not_found=( $not_found\\n"$file" )
+	fi
+}
+
+[ -z "$*" ] && help_msg 2
+
+while [ -n "$*" ]; do
+	parse_args "$@"
+	shift ${shift:-1}
+	unset shift
+done
+
+if [ -n "$songs" ]; then
+	for f in $songs; do
+		mklist $f
+	done
+else
+	for f in $(< $playlist |tr " " @ | grep -v \#); do
+		mklist $f
+	done
+fi
+
+if [ -n "$not_found" ]; then
+	clear
+	print "the following files were not found:\n"$not_found"\n\n"
+	read -k \?"press any key to continue "
+fi
+
+for n in $(seq ${repeat_num:-1}); do
+	$debug eval $list
+done
+	
