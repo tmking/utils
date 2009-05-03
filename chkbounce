@@ -1,0 +1,20 @@
+#!/bin/zsh
+
+. ~/.procmail/vars.rc
+
+to=$(echo $MATCH | tr -d '<>\";') || exit 127
+
+email_msg=$(cat /dev/stdin)
+
+if grep -wq $to $BOUNCE_RCV_LIST; then
+	echo "$email_msg"
+	exit 0 # this bounce is ok, we know the user
+else
+	case $to in
+		*undisclosed-recipients:*)
+			echo "$email_msg"; exit 0
+	esac
+
+	echo "$email_msg" | formail -A "X-Fake-Bounce: yes"
+	exit 0 # this bounce is fake, discard it
+fi

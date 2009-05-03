@@ -1,0 +1,33 @@
+#!/bin/zsh
+
+dir=/var/log/postfix
+master=$dir/mail
+rbl_file=$dir/rbl
+nonlocal_file=$dir/nonlocal
+deliveries_file=$dir/deliveries
+ham_file=$dir/ham
+spam_file=$dir/spam
+
+lc()
+{
+	wc -l $1 | cut -d' ' -f1
+}
+
+connect=$(grep -cw "connect from" $master)
+disconnect=$(grep -cw "disconnect from" $master)
+lost=$(grep -cw "lost connection" $master)
+
+rbl=$(lc $rbl_file)
+nonlocal=$(lc $nonlocal_file)
+deliveries=$(lc $deliveries_file)
+ham=$(lc $ham_file)
+spam=$(lc $spam_file)
+
+print connections: $connect
+print disconnections: $disconnect 
+
+print rbl rejections: $rbl
+print nonlocal rejections: $nonlocal
+print total deliveries: $deliveries
+print total spams: $spam
+print total ham: $ham

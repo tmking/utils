@@ -1,0 +1,5 @@
+#!/bin/sh
+
+date_str=$(date -d '14 days ago' +%Y%m%d)
+
+rm -f ~/.procmail/log-$date_str 2>/dev/null

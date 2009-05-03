@@ -1,0 +1,39 @@
+#!/bin/zsh
+
+. $HOME/.procmail/vars.rc
+
+spam=( $SPAMDIR/*/*(N) )
+ham=( $HAMDIR/*/*(N) )
+not_spam=( $HOME/mail/false-ham/*/*(N) )
+
+[ -n "$spam" ] && echo -n "Spam (${#spam}): "
+if [ ${#spam} -gt 1000 ]; then
+	for f in $spam; do
+		sa-learn --spam $f >/dev/null 2>&1
+	done
+	echo "done"
+fi
+
+if [ $#ham -gt 0 ]; then
+	echo -n "Ham (${#ham}): "
+	sa-learn --ham $ham 2>/dev/null
+fi
+
+if [ $#not_spam -gt 0 ]; then	
+	echo -n "Not Spam (${#not_spam}): "
+	sa-learn --forget $not_spam 2>/dev/null &&
+	sa-learn --ham $not_spam 2>/dev/null
+fi
+
+if [ ${#spam} -gt 1000 ]; then
+	echo "deleting ${#spam} spams"
+	for f in $spam; do
+		rm -f $f
+	done
+else
+	rm -f $spam
+#	rm -f $ham
+fi
+
+sa-learn --dump magic
+
