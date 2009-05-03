@@ -1,0 +1,7 @@
+#!/bin/bash
+
+while [ -n "$*" ]; do
+	echo -n "blocking $1: "
+	sudo iptables -A blocked -s $1 -j logdrop && echo done || echo failed
+	shift
+done
