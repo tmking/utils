@@ -1,32 +1,69 @@
 #!/bin/zsh
 
-version=$1
-srcdir=$HOME/src/nginx-$RANDOM
+get_source()
+{
+    mkdir $srcdir
 
-[ -z $1 ] && exit 127
+    cd $srcdir
+
+    snarf http://sysoev.ru/nginx/nginx-$version.tar.gz
+
+    $sudo apt-get source nginx   
+}
+
+unpack_source()
+{
+    cd $srcdir/*(/)
+    
+    uupdate --upstream-version $version ../nginx-$version.tar.gz    
+}
+
+build_source()
+{
+    cd $srcdir/nginx-$version
+    
+    debuild -i -us -uc
+}
+
+install_deb()
+{
+    cd $srcdir
+
+    $sudo dpkg -i nginx_$version*.deb && sudo aptitude hold nginx
+}
+
+cleanup()
+{
+    $sudo rm -Rf $srcdir
+}
+
+help()
+{
+    print "$me:t action"
+    print " actions:"
+    for a in $my_actions; do
+	print "\t$a"
+    done
+}
+
+me=$0
+my_actions=( $(grep "()" $me | tr -d "()" | egrep -v "(help|grep)") )
+[ -z $1 ] && help && exit 1
 
 [ "$UID" = 0 ] || sudo=sudo
 
-mkdir $srcdir
+version=$1
+srcdir=$HOME/src/nginx-$(date +%Y%m%d)
 
-cd $srcdir
+shift
 
-snarf http://sysoev.ru/nginx/nginx-$version.tar.gz
-
-$sudo apt-get source nginx
-
-cd *(/)
-
-uupdate --upstream-version $version ../nginx-$version.tar.gz
-
-cd ../nginx-$version
-
-debuild -i -us -uc
-
-cd ../
-
-$sudo dpkg -i nginx_$version*.deb && sudo aptitude hold nginx
-
-$sudo killall -HUP nginx
-
-$sudo rm -Rf $srcdir
+if [ "$*" ]; then
+    while  [ -n "$*" ]; do
+	$1
+	shift
+    done
+else
+    for a in $my_actions; do
+	$a
+    done
+fi

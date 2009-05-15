@@ -106,9 +106,9 @@ mklist()
 
 	if [ -f "$file" ]; then
 		set -- $(play_with $file)
-		[ "$1" = 0 ] && multi=1 && shift 1
+		[ "$1" = 0 ] && local multi=1 && shift 1
 		p=$@
-		if [ "$p" != "$old_p" ] || bool $multi; then
+		if [ "$p" != "$old_p" ] || [ -n "$multi" ]; then
 			[ -n "$list" ] && sep=';'
 			list=( $list $sep $p \""$file"\" )
 		else
