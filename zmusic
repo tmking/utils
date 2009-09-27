@@ -4,60 +4,86 @@ echo $PATH >/tmp/path
 
 banshee_check_pause()
 {
-	case $(banshee-1 --query-current-state) in
-        	*paused)        banshee-1 --play        ;;
-        	*)              banshee-1 --pause
-	esac
+    case $(banshee-1 --query-current-state) in
+        *paused)        banshee-1 --play        ;;
+        *)              banshee-1 --pause
+    esac
 }
 
 check_pid()
 {
-	if pidof $1 >/dev/null && ! pidof $preferred >/dev/null; then
-		return 0
+    if pidof $1 >/dev/null && ! pidof $preferred >/dev/null; then
+	return 0
 
-	fi
-	return 1
+    fi
+    return 1
 }
 
 mute()
 {
-	case $(amixer -c 0 get Master | grep Mono) in
-		*off*)	amixer -c 0 set Master unmute	;;
-		*)	amixer -c 0 set Master mute
-	esac
+    case $(amixer -c 0 get Master | grep Mono:) in
+	*off*)	
+	    amixer -c 0 set Master unmute
+	    msg="volume unmuted"
+	    ;;
+	*on*)
+	    amixer -c 0 set Master mute
+	    msg="volume muted"
+    esac
 }
 
-case $1 in 
-	mute)		mute; exit 			;;
-	up|volume-up)	amixer sset Master 2%+; exit	;;
-	down|volume-down)	amixer sset Master 2%-;	exit
-esac
+wrap_amixer()
+{
+    amixer sset Master $1 | grep Mono: | cut -d' ' -f6 | tr -d ']['
+}
+
+adj_volume()
+{
+    case $1 in 
+	mute)		
+	    mute
+	    ;;
+	up|volume-up)	
+	    msg=$(wrap_amixer 2%+) 
+	    ;;
+	down|volume-down)	
+	    msg=$(wrap_amixer 2%-)
+    esac
+echo it is $msg
+    gnome-osd-client $msg
+    exit
+}
+
+args=$@
+adj_volume $@
+
+set -- $(echo $args)
 
 if check_pid audacious; then
-	case $1 in
-		play|stop)	audacious -t	;;
-		next)		audacious -f	;;
-		prev)		audacious -r	
-	esac
+    case $1 in
+	play|stop)	audacious -t	;;
+	next)		audacious -f	;;
+	prev)		audacious -r	
+    esac
 elif check_pid banshee-1; then
-	case $1 in
-		play|stop|pause)	banshee_check_pause	;;
-		next)		banshee-1 --next			;;
-		prev)		banshee-1 --previous
-	esac	
+    case $1 in
+	play|stop|pause)	banshee_check_pause	;;
+	next)		banshee-1 --next			;;
+	prev)		banshee-1 --previous
+    esac	
 elif check_pid rhythmbox; then
-	case $1 in
-		play|stop|pause)	rhythmbox-client --play-pause	;;
-		next)		rhythmbox-client --next		;;
-		prev)		rhythmbox-client --previous	;;
-		mute)		mute
-	esac
+    case $1 in
+	play|stop|pause)	rhythmbox-client --play-pause	;;
+	next)		rhythmbox-client --next		;;
+	prev)		rhythmbox-client --previous	;;
+	mute)		mute
+    esac
 elif ps auxw | grep python | grep -q listen; then
-	case $1 in
-		play|stop|pause)	listen --play-pause	;;
-		next)			listen --next		;;
-		prev*)			listen --prev		;;
-		mute)			mute			;;
-	esac
+    case $1 in
+	play|stop|pause)	listen --play-pause	;;
+	next)			listen --next		;;
+	prev*)			listen --prev		;;
+	mute)			mute			;;
+    esac
 fi
 		

@@ -1,5 +1,9 @@
 #!/bin/zsh
 
+srcdir=$HOME/src/nginx-$(date +%Y%m%d)
+gem_path=$HOME/.gem/ruby/1.8/gems
+passenger_version=$(gem list passenger | grep passenger | cut -d' ' -f2 | tr -d '(),')
+
 get_source()
 {
     mkdir $srcdir
@@ -13,9 +17,23 @@ get_source()
 
 unpack_source()
 {
-    cd $srcdir/*(/)
+    cd $srcdir/*(/N)
     
     uupdate --upstream-version $version ../nginx-$version.tar.gz    
+}
+
+add_passenger_module()
+{
+    if [ -x "$gem_path/passenger-$passenger_version/bin/passenger-install-nginx-module" ]; then
+	( cd $gem_path/passenger-$passenger_version && rake nginx )
+	local str="--add-module='$gem_path/passenger-$passenger_version/ext/nginx'"
+	local file="$srcdir/nginx-$version/debian/rules"
+	head -n 1 $file >$file.new
+	echo "CONFIGURE_OPTS = $str" >>$file.new
+	tail -n $(( `wc -l $file | cut -d' ' -f1` - 1  )) $file >>$file.new
+	mv $file.new $file
+    fi
+		
 }
 
 build_source()
@@ -52,10 +70,7 @@ my_actions=( $(grep "()" $me | tr -d "()" | egrep -v "(help|grep)") )
 
 [ "$UID" = 0 ] || sudo=sudo
 
-version=$1
-srcdir=$HOME/src/nginx-$(date +%Y%m%d)
-
-shift
+version=$1; shift
 
 if [ "$*" ]; then
     while  [ -n "$*" ]; do
