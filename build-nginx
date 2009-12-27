@@ -1,7 +1,7 @@
 #!/bin/zsh
 
 srcdir=$HOME/src/nginx-$(date +%Y%m%d)
-gem_path=$HOME/.gem/ruby/1.8/gems
+gem_path=${GEM_PATH:-$HOME/.gem/ruby/1.8/gems}
 passenger_version=$(gem list passenger | grep passenger | cut -d' ' -f2 | tr -d '(),')
 
 get_source()
