@@ -39,12 +39,14 @@ testargs()
 {
 	case $1 in
 		*/*)
-			FILE=$1		;;
+		FILE=$1		;;
 		*)
 		if [ -e $DIR/$1 ]; then
-			FILE=$DIR/$1
+		    FILE=$DIR/$1
+		elif [ -e $DIR/$1.log ]; then
+		    FILE=$DIR/$1.log
 		else
-			FILE="./$1"
+		    FILE="./$1"
 		fi
 	esac
 }
