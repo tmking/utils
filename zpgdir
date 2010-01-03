@@ -1,0 +1,110 @@
+#!/bin/zsh
+
+setopt extendedglob
+
+gpg_cmd=$(which gpg)
+gpg_args+=( --quiet --no-tty )
+
+me=$0
+
+function output()
+{
+	[ "$debug" ] && return
+	[[ "$1" =~ -. ]] && (arg=$1; shift)
+	echo $arg $@
+}
+
+function print_help()
+{
+	echo "$me -e|-d <dir>"
+	echo "an exit value of 127 means that <dir> doesn't exist"
+}
+
+function check_target_dir()
+{
+	[ -d "$2" ] || exit 127
+}
+
+function is_encrypting()
+{
+	case $action_word in
+		enc*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+function output_file()
+{
+	is_encrypting && echo $f.gpg || echo $f:r
+}
+
+function file_to_compare()
+{
+	is_encrypting && echo $output_file:r || echo $output_file
+}
+
+function check_output_file()
+{
+	tmpfile=$(mktemp -u XXXXXXXX)
+
+	$debug $gpg_cmd $gpg_args -o $tmpfile -d $output_file
+
+	if diff -q $tmpfile file_to_compare >/dev/null 2>&1; then
+		output -n " (identical output file found, overwriting)"
+		rm -f $output_file
+	else
+		new_file=$output_file.$RANDOM
+		output -n " (differing output file found, renaming to $new_file)"
+		mv $output_file $new_file
+	fi
+
+	rm -f $tmpfile
+}
+
+while [ "$*" ]; do
+	case $1 in
+		-t|--test)
+			debug=print
+			;;
+		-h|--help)
+			print_help
+			;;
+		-e|--enc*)
+			check_target_dir $@
+			action_arg=-e
+			action_word='encrypting'
+			files=( $2/**/*~*.gpg(.N) )
+			shift
+			;;
+		-d|--dec*)
+			check_target_dir $@
+			action_arg=-d
+			action_word='decrypting'
+			files=( $2/**/*.gpg(.N) )
+			shift
+			;;
+		*)
+			gpg_args+=( $1 )
+	esac
+
+	shift
+done
+
+for f in $files; do
+	output -n "$action_word $f:"
+	output_file=$(output_file)
+
+	[ -e "$output_file" ] && check_output_file
+
+	$debug $gpg_cmd -o $output_file $gpg_args $action_arg $f
+
+	if [ -e "$output_file" ]; then
+		$debug rm -f $f
+		output ' done'
+	else
+		output ' error'
+		rc+=1
+	fi
+done
+
+exit $rc
