@@ -1,0 +1,11 @@
+#!/bin/zsh
+
+dir=$HOME/Development
+
+for subdir in $dir/**/*(/); do
+  if [ -d "$subdir/.git" ]; then
+    echo "optimizing $subdir"
+    (cd $subdir && git gc)
+    echo
+  fi
+done  
