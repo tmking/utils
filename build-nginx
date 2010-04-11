@@ -11,7 +11,7 @@ get_source()
 
     cd $srcdir
 
-    snarf http://sysoev.ru/nginx/nginx-$version.tar.gz
+    wget http://sysoev.ru/nginx/nginx-$version.tar.gz
 
     $sudo apt-get source nginx   
 }
