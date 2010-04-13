@@ -1,6 +1,6 @@
 #!/bin/zsh
 
-srcdir=$HOME/src/nginx-$(date +%Y%m%d)
+srcdir=/tmp/nginx-$(date +%Y%m%d)
 gem_path=$(echo $GEM_PATH | cut -d':' -f1)
 [ -n "$gem_path" ] && gem_path=$gem_path/gems || gem_path=$HOME/.gem/ruby/1.8/gems
 passenger_version=$(gem list passenger | grep passenger | cut -d' ' -f2 | tr -d '(),')
