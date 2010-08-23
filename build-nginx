@@ -30,7 +30,7 @@ add_passenger_module()
       local str="--add-module='$gem_path/passenger-$passenger_version/ext/nginx'"
       local file="$srcdir/nginx-$version/debian/rules"
       head -n 1 $file >$file.new
-      echo "CONFIGURE_OPTS = $str --http-uwsgi-temp-path=/etc/nginx" >>$file.new
+      echo "CONFIGURE_OPTS = $str --http-uwsgi-temp-path=/etc/nginx --http-scgi-temp-path=/etc/nginx" >>$file.new
       tail -n $(( `wc -l $file | cut -d' ' -f1` - 1  )) $file >>$file.new
       mv $file.new $file
     fi
