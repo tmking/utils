@@ -1,5 +1,10 @@
-#!/bin/sh
+#!/bin/zsh
 
 date_str=$(date -d '14 days ago' +%Y%m%d)
+proclogs=( $HOME/.procmail/log-* )
 
-rm -f ~/.procmail/log-$date_str 2>/dev/null
+for f in $proclogs; do
+	d=$(echo $f | cut -d'-' -f2)
+	[ "$d" -le "$date_str" ] && rm -f $f
+	#echo rm -f ~/.procmail/log-$date_str 2>/dev/null
+done
