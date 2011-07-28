@@ -5,7 +5,7 @@ dir=$HOME/Development
 for subdir in $dir/**/*(/); do
   if [ -d "$subdir/.git" ]; then
     echo "optimizing $subdir"
-    (cd $subdir && git gc --auto)
+    (cd $subdir && git gc --aggressive)
     echo
   fi
 done  
